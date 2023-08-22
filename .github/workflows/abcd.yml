@@ -1,0 +1,85 @@
+name: Non Prod Deployment
+
+run-name: Deployment to ${{inputs.environment}} environment from ${{github.ref_name}} branch
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Select Environment'
+        required: true
+        type: choice
+        options:
+          - dev
+          - tst
+          - prf
+          - stg
+          - ts1
+          - ts2
+          - cte
+          - tst
+          - all
+      region:
+        description: 'Select Region'
+        required: true
+        type: choice
+        options:
+          - central
+          - east
+          - both
+
+jobs:
+  Build:
+    name: 'Build and Deployment for ${{ matrix.environment }}'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: 
+          - ${{ github.event.inputs.environment }}
+    steps:
+      - name: Expand matrix for all environments
+        if: matrix.environment == 'all'
+        run: echo "::set-output name=matrix::[\"dev\", \"tst\", \"prf\", \"stg\", \"ts1\", \"ts2\", \"cte\", \"tst\"]"
+        id: matrix
+      - name: Setup Deployment Steps
+        uses: optum-rx-consumer-digital/orx-cwp-config-webapp/.github/actions/default_deployment_steps@master
+        continue-on-error: false
+        with:
+          repository: ${{ github.repository }}
+
+      - name: Login to Azure
+        uses: azure/login@v1
+        continue-on-error: false
+        with:
+          creds: ${{ secrets.SERVICEPRINCIPAL }}
+          
+      - name: Azure Functions Action - Central
+        if: github.event.inputs.region == 'central' || github.event.inputs.region == 'both'
+        uses: Azure/functions-action@v1.5.0
+        with:
+          app-name: config-graph-${{ matrix.environment }}-us-c-fn
+          package: ./
+          slot-name: staging        
+
+      - name: Azure CLI Slot Swap Command - Central
+        if: github.event.inputs.region == 'central' || github.event.inputs.region == 'both'
+        run: |
+          az functionapp deployment slot swap -g mbr-portal-${{ matrix.environment }}-us-c-rg -n config-graph-${{ matrix.environment }}-us-c-fn --slot staging --target-slot production
+
+      - name: Azure Functions Action - East
+        if: github.event.inputs.region == 'east' || github.event.inputs.region == 'both'
+        uses: Azure/functions-action@v1
+        with:
+          app-name: 'config-graph-${{ matrix.environment }}-us-e-fn'
+          package: ./
+          slot-name: staging
+
+      - name: Azure CLI Slot Swap Command - East
+        if: github.event.inputs.region == 'east' || github.event.inputs.region == 'both'
+        run: |
+          az functionapp deployment slot swap -g mbr-portal-${{ matrix.environment }}-us-e-rg -n config-graph-${{ matrix.environment }}-us-e-fn --slot staging --target-slot production
+
+      - name: Logout from Azure
+        run: |
+           az logout
